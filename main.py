@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from requests import RequestException
 
 from scraper import (
@@ -32,6 +33,20 @@ API to access South African NSC (National Senior Certificate) past examination p
 Papers are scraped from the Department of Basic Education website (education.gov.za).
     """,
     version="2.0.0",
+)
+
+# Add CORS middleware for frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",  # Next.js dev server
+        "http://127.0.0.1:3000",  # Alternative localhost
+        "https://matricmate.co.za",
+        "https://www.matricmate.co.za",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
