@@ -202,7 +202,7 @@ def get_papers(
 
     if subject:
         subject_lower = subject.lower()
-        grouped = {k: v for k, v in grouped.items() if subject_lower in k.lower()}
+        grouped = {k: v for k, v in grouped.items() if k and subject_lower in k.lower()}
 
     return PapersResponse(
         year=year,

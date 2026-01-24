@@ -118,13 +118,18 @@ def parse_paper_link(text: str, current_subject: str) -> dict | None:
     # Check if it's a memo
     is_memo = "memo" in text.lower()
 
-    # Extract paper number - match both "P1/P2/P3" and "Paper 1/Paper 2/Paper 3"
+    # Extract paper number - match "P1/P2/P3", "Paper 1/2/3", or "Memo 1/2/3"
     paper_match = re.search(r"\b(P[1-3])\b", text, re.IGNORECASE)
     if not paper_match:
         paper_match = re.search(r"\bPaper\s*([1-3])\b", text, re.IGNORECASE)
         if not paper_match:
-            return None
-        paper = f"P{paper_match.group(1)}"
+            # Also match standalone memo links like "Memo 1 (English)"
+            paper_match = re.search(r"\bMemo\s*([1-3])\b", text, re.IGNORECASE)
+            if not paper_match:
+                return None
+            paper = f"P{paper_match.group(1)}"
+        else:
+            paper = f"P{paper_match.group(1)}"
     else:
         paper = paper_match.group(1).upper()
 
@@ -222,7 +227,7 @@ def group_papers_by_subject(papers: list[dict]) -> dict:
         paper_num = p["paper"]
         is_memo = p["is_memo"]
         url = p["download_url"]
-        language = p.get("language", "default")
+        language = p.get("language") or "default"
 
         if subject not in grouped:
             grouped[subject] = {}
