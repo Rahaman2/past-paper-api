@@ -2,69 +2,126 @@ from fastapi import FastAPI, HTTPException, Query
 from requests import RequestException
 
 from scraper import (
-    # DBE Main Site
     MAIN_PAGE_URL,
     get_exam_sessions,
     get_sessions_by_year,
     scrape_papers_from_url,
     group_papers_by_subject,
-    # Eastern Cape Site (all subjects)
-    EC_INDEX_URL,
-    get_ec_exam_sessions,
-    get_ec_sessions_by_year,
-    scrape_ec_papers_from_url,
-    group_ec_papers_by_subject,
+)
+from models import (
+    RootResponse,
+    SessionsResponse,
+    SessionsByYearResponse,
+    PapersResponse,
+    SubjectsListResponse,
+    AvailableValuesResponse,
+    SessionType,
 )
 
 app = FastAPI(
     title="NSC Past Papers API",
-    description="API to access South African NSC past examination papers and memos",
-    version="1.0.0",
+    description="""
+API to access South African NSC (National Senior Certificate) past examination papers and memos.
+
+## Features
+- Get download links for question papers and memorandums
+- Filter by year, session, and subject
+- Supports 60+ subjects including all languages and STEM subjects
+
+## Data Source
+Papers are scraped from the Department of Basic Education website (education.gov.za).
+    """,
+    version="2.0.0",
 )
 
 
-@app.get("/")
+@app.get("/", response_model=RootResponse)
 def root():
-    return {
-        "message": "NSC Past Papers API",
-        "sources": {
-            "dbe": "Department of Basic Education (Languages & Technical)",
-            "ec": "Eastern Cape (All subjects including Math, Science, etc.)",
-        },
-        "endpoints": {
-            "/dbe/sessions": "DBE exam sessions",
-            "/dbe/papers/{year}/{session}": "DBE papers (languages)",
-            "/ec/sessions": "Eastern Cape exam sessions",
-            "/ec/sessions/{year}": "EC sessions for a specific year",
-            "/ec/papers/{year}/{session}": "EC papers (all subjects)",
-            "/ec/subjects/{year}/{session}": "List subjects for EC session",
-        },
-    }
+    """
+    API root - shows available endpoints.
+    """
+    return RootResponse(
+        endpoints={
+            "/sessions": "All available exam sessions",
+            "/sessions/{year}": "Sessions for a specific year",
+            "/papers/{year}/{session}": "Papers for a year/session (all subjects)",
+            "/papers/{year}/{session}?subject=math": "Filter papers by subject name",
+            "/subjects/{year}/{session}": "List all subjects for a session",
+            "/values": "Show all acceptable parameter values",
+        }
+    )
 
 
-# =============================================================================
-# DBE Main Site Endpoints (Languages and Technical subjects)
-# =============================================================================
+@app.get("/values", response_model=AvailableValuesResponse)
+def get_available_values():
+    """
+    Get all acceptable parameter values for the API.
 
-@app.get("/dbe/sessions")
-def get_dbe_sessions():
-    """Get all exam sessions from DBE main site."""
+    Use this endpoint to discover:
+    - Valid session types (November, MayJune, etc.)
+    - Available years
+    - Sample list of subjects
+    - Paper languages and numbers
+    """
     try:
         sessions = get_exam_sessions()
     except RequestException as e:
         raise HTTPException(status_code=503, detail=f"Failed to fetch data: {str(e)}")
 
-    return {
-        "source": "dbe",
-        "source_url": MAIN_PAGE_URL,
-        "total": len(sessions),
-        "sessions": sessions,
-    }
+    # Extract unique years (sorted descending)
+    years = sorted(set(s["year"] for s in sessions if s["year"]), reverse=True)
+
+    # Get subjects from the most recent session
+    sample_subjects: list[str] = []
+    if sessions:
+        # Find a session with papers to get subject list
+        for session in sessions:
+            if session.get("working_url"):
+                try:
+                    papers = scrape_papers_from_url(session["working_url"])
+                    grouped = group_papers_by_subject(papers)
+                    sample_subjects = sorted(grouped.keys())
+                    break
+                except Exception:
+                    continue
+
+    return AvailableValuesResponse(
+        sessions=[s.value for s in SessionType],
+        years=years,
+        sample_subjects=sample_subjects,
+        languages=["English", "Afrikaans"],
+        paper_numbers=["P1", "P2", "P3"],
+    )
 
 
-@app.get("/dbe/sessions/{year}")
-def get_dbe_sessions_for_year(year: str):
-    """Get DBE exam sessions filtered by year."""
+@app.get("/sessions", response_model=SessionsResponse)
+def get_sessions():
+    """
+    Get all available exam sessions.
+
+    Returns a list of all exam sessions available in the database,
+    including year, session type, and the URL to fetch papers from.
+    """
+    try:
+        sessions = get_exam_sessions()
+    except RequestException as e:
+        raise HTTPException(status_code=503, detail=f"Failed to fetch data: {str(e)}")
+
+    return SessionsResponse(
+        source_url=MAIN_PAGE_URL,
+        total=len(sessions),
+        sessions=sessions,
+    )
+
+
+@app.get("/sessions/{year}", response_model=SessionsByYearResponse)
+def get_sessions_for_year(year: str):
+    """
+    Get exam sessions filtered by year.
+
+    **Path Parameters:**
+    - **year**: The exam year (e.g., "2024", "2025")
+    """
     try:
         sessions = get_sessions_by_year(year)
     except RequestException as e:
@@ -73,26 +130,50 @@ def get_dbe_sessions_for_year(year: str):
     if not sessions:
         raise HTTPException(status_code=404, detail=f"No sessions found for year {year}")
 
-    return {
-        "source": "dbe",
-        "year": year,
-        "total": len(sessions),
-        "sessions": sessions,
-    }
+    return SessionsByYearResponse(
+        year=year,
+        total=len(sessions),
+        sessions=sessions,
+    )
 
 
-@app.get("/dbe/papers/{year}/{session}")
-def get_dbe_papers(
+@app.get("/papers/{year}/{session}", response_model=PapersResponse)
+def get_papers(
     year: str,
     session: str,
-    subject: str = Query(None, description="Filter by subject name"),
+    subject: str | None = Query(
+        None,
+        description=(
+            "Filter by subject name (case-insensitive partial match). "
+            "Examples: 'english fal', 'english hl', 'afrikaans', 'isizulu hl', 'math', 'physics'"
+        ),
+        examples=["english fal", "english hl", "afrikaans", "isizulu hl", "math", "physics", "fal", "hl"],
+    ),
 ):
     """
-    Get papers from DBE site (mainly languages and technical subjects).
+    Get papers for a specific year and session.
 
-    - **year**: e.g., "2024"
-    - **session**: e.g., "MayJune" or "November"
-    - **subject**: Optional filter by subject name
+    **Path Parameters:**
+    - **year**: Exam year (e.g., "2024", "2025")
+    - **session**: Session type - one of: November, MayJune, FebMarch, Supplementary
+
+    **Query Parameters:**
+    - **subject**: Optional filter by subject name (case-insensitive partial match)
+
+    **Subject Filter Examples:**
+    | Query | Matches |
+    |-------|---------|
+    | `?subject=english fal` | English FAL |
+    | `?subject=english hl` | English HL |
+    | `?subject=english` | English FAL, English HL |
+    | `?subject=afrikaans` | Afrikaans FAL, Afrikaans HL, Afrikaans SAL |
+    | `?subject=isizulu hl` | IsiZulu HL |
+    | `?subject=math` | Mathematics, Mathematical Literacy, Technical Mathematics |
+    | `?subject=fal` | All FAL (First Additional Language) subjects |
+    | `?subject=hl` | All HL (Home Language) subjects |
+
+    **Response Structure:**
+    Papers are grouped by: `subject -> paper_number (P1/P2/P3) -> language -> download_url`
     """
     try:
         sessions = get_sessions_by_year(year)
@@ -123,114 +204,28 @@ def get_dbe_papers(
         subject_lower = subject.lower()
         grouped = {k: v for k, v in grouped.items() if subject_lower in k.lower()}
 
-    return {
-        "source": "dbe",
-        "year": year,
-        "session": session,
-        "source_url": target_session["working_url"],
-        "total_subjects": len(grouped),
-        "subjects": grouped,
-    }
+    return PapersResponse(
+        year=year,
+        session=session,
+        source_url=target_session["working_url"],
+        total_subjects=len(grouped),
+        subjects=grouped,
+    )
 
 
-# =============================================================================
-# Eastern Cape Site Endpoints (All subjects including Math, Science, etc.)
-# =============================================================================
-
-@app.get("/ec/sessions")
-def get_ec_sessions():
-    """Get all exam sessions from Eastern Cape site (has all subjects)."""
-    try:
-        sessions = get_ec_exam_sessions()
-    except RequestException as e:
-        raise HTTPException(status_code=503, detail=f"Failed to fetch data: {str(e)}")
-
-    return {
-        "source": "ecexams",
-        "source_url": EC_INDEX_URL,
-        "total": len(sessions),
-        "sessions": sessions,
-    }
-
-
-@app.get("/ec/sessions/{year}")
-def get_ec_sessions_for_year(year: str):
-    """Get Eastern Cape exam sessions filtered by year."""
-    try:
-        sessions = get_ec_sessions_by_year(year)
-    except RequestException as e:
-        raise HTTPException(status_code=503, detail=f"Failed to fetch data: {str(e)}")
-
-    if not sessions:
-        raise HTTPException(status_code=404, detail=f"No sessions found for year {year}")
-
-    return {
-        "source": "ecexams",
-        "year": year,
-        "total": len(sessions),
-        "sessions": sessions,
-    }
-
-
-@app.get("/ec/papers/{year}/{session}")
-def get_ec_papers(
-    year: str,
-    session: str,
-    subject: str = Query(None, description="Filter by subject name (e.g., 'math', 'physics')"),
-):
+@app.get("/subjects/{year}/{session}", response_model=SubjectsListResponse)
+def list_subjects(year: str, session: str):
     """
-    Get papers from Eastern Cape site (ALL subjects including Math, Science, etc.).
+    List all available subjects for an exam session.
 
-    - **year**: e.g., "2024"
-    - **session**: e.g., "November", "MayJune", "September"
-    - **subject**: Optional filter by subject name (case-insensitive partial match)
+    **Path Parameters:**
+    - **year**: Exam year (e.g., "2024", "2025")
+    - **session**: Session type - one of: November, MayJune, FebMarch, Supplementary
 
-    Returns papers grouped by subject with download links (zip files).
+    Returns an alphabetically sorted list of all subject names available for the specified session.
     """
     try:
-        sessions = get_ec_sessions_by_year(year)
-    except RequestException as e:
-        raise HTTPException(status_code=503, detail=f"Failed to fetch data: {str(e)}")
-
-    target_session = None
-    for s in sessions:
-        if s["session"] and s["session"].lower() == session.lower():
-            target_session = s
-            break
-
-    if not target_session:
-        available = list(set(s["session"] for s in sessions if s["session"]))
-        raise HTTPException(
-            status_code=404,
-            detail=f"Session '{session}' not found for year {year}. Available: {available}",
-        )
-
-    try:
-        papers = scrape_ec_papers_from_url(target_session["working_url"])
-    except RequestException as e:
-        raise HTTPException(status_code=503, detail=f"Failed to fetch papers: {str(e)}")
-
-    grouped = group_ec_papers_by_subject(papers)
-
-    if subject:
-        subject_lower = subject.lower()
-        grouped = {k: v for k, v in grouped.items() if subject_lower in k.lower()}
-
-    return {
-        "source": "ecexams",
-        "year": year,
-        "session": session,
-        "source_url": target_session["working_url"],
-        "total_subjects": len(grouped),
-        "subjects": grouped,
-    }
-
-
-@app.get("/ec/subjects/{year}/{session}")
-def list_ec_subjects(year: str, session: str):
-    """List all available subjects for an Eastern Cape exam session."""
-    try:
-        sessions = get_ec_sessions_by_year(year)
+        sessions = get_sessions_by_year(year)
     except RequestException as e:
         raise HTTPException(status_code=503, detail=f"Failed to fetch data: {str(e)}")
 
@@ -244,20 +239,19 @@ def list_ec_subjects(year: str, session: str):
         raise HTTPException(status_code=404, detail=f"Session '{session}' not found for year {year}")
 
     try:
-        papers = scrape_ec_papers_from_url(target_session["working_url"])
+        papers = scrape_papers_from_url(target_session["working_url"])
     except RequestException as e:
         raise HTTPException(status_code=503, detail=f"Failed to fetch papers: {str(e)}")
 
-    grouped = group_ec_papers_by_subject(papers)
+    grouped = group_papers_by_subject(papers)
     subjects = sorted(grouped.keys())
 
-    return {
-        "source": "ecexams",
-        "year": year,
-        "session": session,
-        "total": len(subjects),
-        "subjects": subjects,
-    }
+    return SubjectsListResponse(
+        year=year,
+        session=session,
+        total=len(subjects),
+        subjects=subjects,
+    )
 
 
 if __name__ == "__main__":

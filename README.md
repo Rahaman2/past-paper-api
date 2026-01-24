@@ -1,15 +1,14 @@
 # NSC Past Papers API
 
-A FastAPI-based REST API that scrapes and serves South African National Senior Certificate (NSC) past examination papers and memorandums.
+A FastAPI-based REST API that scrapes and serves South African National Senior Certificate (NSC) past examination papers and memorandums from the Department of Basic Education.
 
 ## Features
 
-- Fetches exam papers from two sources:
-  - **DBE (Department of Basic Education)** - Languages and Technical subjects
-  - **Eastern Cape Examinations** - All 46+ subjects including Mathematics, Physical Sciences, etc.
-- Returns structured JSON with download links for question papers and memos
+- Download links for 60+ subjects (Languages, STEM, Business, Arts, etc.)
 - Filter by year, session, and subject
+- Papers available in English and Afrikaans
 - Swagger UI documentation at `/docs`
+- Pydantic models for type-safe responses
 
 ## Installation
 
@@ -29,120 +28,269 @@ The API will be available at `http://localhost:8000`
 
 ## API Endpoints
 
-### Root
-```
-GET /
-```
-Returns available endpoints and data sources.
-
-### Eastern Cape (All Subjects)
-
 | Endpoint | Description |
 |----------|-------------|
-| `GET /ec/sessions` | List all available exam sessions |
-| `GET /ec/sessions/{year}` | Get sessions for a specific year |
-| `GET /ec/papers/{year}/{session}` | Get papers grouped by subject |
-| `GET /ec/subjects/{year}/{session}` | List all subjects for a session |
+| `GET /` | API info and available endpoints |
+| `GET /values` | **All acceptable parameter values** |
+| `GET /sessions` | List all available exam sessions |
+| `GET /sessions/{year}` | Get sessions for a specific year |
+| `GET /papers/{year}/{session}` | Get papers grouped by subject |
+| `GET /papers/{year}/{session}?subject=math` | Filter papers by subject |
+| `GET /subjects/{year}/{session}` | List all subjects for a session |
 
-### DBE (Languages & Technical)
+## Parameter Values
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /dbe/sessions` | List all available exam sessions |
-| `GET /dbe/sessions/{year}` | Get sessions for a specific year |
-| `GET /dbe/papers/{year}/{session}` | Get papers grouped by subject |
+Use `GET /values` to get all acceptable parameter values dynamically. Here's a summary:
 
-## Usage Examples
+### Session Types
+| Value | Description |
+|-------|-------------|
+| `November` | Main NSC exams (October/November) |
+| `MayJune` | Mid-year exams |
+| `FebMarch` | Supplementary exams |
+| `Supplementary` | Additional supplementary exams |
 
-### Get all 2024 exam sessions
+### Years
+Years from 2008 to present (e.g., `2024`, `2025`)
+
+### Subject Filter (`?subject=`)
+The `subject` query parameter accepts **partial, case-insensitive matches**:
+
+| Query | Matches |
+|-------|---------|
+| `?subject=math` | Mathematics, Mathematical Literacy, Technical Mathematics |
+| `?subject=english` | English FAL, English HL |
+| `?subject=english fal` | English FAL |
+| `?subject=english hl` | English HL |
+| `?subject=afrikaans` | Afrikaans FAL, Afrikaans HL, Afrikaans SAL |
+| `?subject=isizulu` | IsiZulu FAL, IsiZulu HL |
+| `?subject=physics` | Physical Sciences |
+| `?subject=life` | Life Sciences |
+| `?subject=accounting` | Accounting |
+| `?subject=fal` | All FAL (First Additional Language) subjects |
+| `?subject=hl` | All HL (Home Language) subjects |
+
+**Examples:**
 ```bash
-curl http://localhost:8000/ec/sessions/2024
+# Get English FAL papers
+curl "http://localhost:8000/papers/2025/MayJune?subject=english fal"
+
+# Get all Afrikaans variants (FAL, HL, SAL)
+curl "http://localhost:8000/papers/2025/MayJune?subject=afrikaans"
+
+# Get IsiZulu Home Language
+curl "http://localhost:8000/papers/2025/MayJune?subject=isizulu hl"
+
+# Get all Home Language subjects
+curl "http://localhost:8000/papers/2025/MayJune?subject=hl"
 ```
 
-### Get Mathematics papers for November 2024
-```bash
-curl "http://localhost:8000/ec/papers/2024/November?subject=math"
-```
+### Languages
+Papers are available in:
+- `English`
+- `Afrikaans`
 
-Response:
+### Paper Numbers
+- `P1` - Paper 1
+- `P2` - Paper 2
+- `P3` - Paper 3
+
+## Response Models
+
+### PapersResponse
+
 ```json
 {
-  "source": "ecexams",
-  "year": "2024",
-  "session": "November",
-  "total_subjects": 3,
+  "year": "2025",
+  "session": "MayJune",
+  "source_url": "https://education.gov.za/...",
+  "total_subjects": 61,
   "subjects": {
     "Mathematics": {
       "P1": {
-        "paper": "http://www.ecexams.co.za/.../Mathematics P1 Nov 2024.zip",
-        "memo": "http://www.ecexams.co.za/.../Mathematics P1 Nov 2024 MG Afr & Eng.zip"
+        "paper": {
+          "English": "https://education.gov.za/LinkClick.aspx?fileticket=...",
+          "Afrikaans": "https://education.gov.za/LinkClick.aspx?fileticket=..."
+        },
+        "memo": {}
       },
       "P2": {
-        "paper": "http://www.ecexams.co.za/.../Mathematics P2 Nov 2024.zip",
-        "memo": "http://www.ecexams.co.za/.../Mathematics P2 Nov 2024 MG Afr & Eng.zip"
+        "paper": {
+          "English": "https://education.gov.za/LinkClick.aspx?fileticket=...",
+          "Afrikaans": "https://education.gov.za/LinkClick.aspx?fileticket=..."
+        },
+        "memo": {}
       }
     },
-    "Mathematical Literacy": { ... },
-    "Technical Mathematics": { ... }
+    "Physical Sciences": {
+      "P1": {
+        "paper": {"English": "https://...", "Afrikaans": "https://..."},
+        "memo": {}
+      }
+    }
   }
 }
 ```
 
-### List all subjects for a session
-```bash
-curl http://localhost:8000/ec/subjects/2024/November
+### SubjectsListResponse
+
+```json
+{
+  "year": "2025",
+  "session": "MayJune",
+  "total": 61,
+  "subjects": [
+    "Accounting",
+    "Afrikaans FAL",
+    "Afrikaans HL",
+    "Agricultural Sciences",
+    "Business Studies",
+    "Computer Application Technology",
+    "Economics",
+    "English FAL",
+    "English HL",
+    "Geography",
+    "History",
+    "Information Technology",
+    "Life Sciences",
+    "Mathematical Literacy",
+    "Mathematics",
+    "Physical Sciences",
+    "..."
+  ]
+}
 ```
 
-## Available Sessions
+### AvailableValuesResponse
 
-- **November** - Main NSC exams
-- **MayJune** - Mid-year exams
-- **September** - Trial/Preparatory exams
-- **FebMarch** - Supplementary exams
+```json
+{
+  "sessions": ["November", "MayJune", "FebMarch", "Supplementary"],
+  "years": ["2025", "2024", "2023", "..."],
+  "sample_subjects": ["Accounting", "Mathematics", "Physical Sciences", "..."],
+  "languages": ["English", "Afrikaans"],
+  "paper_numbers": ["P1", "P2", "P3"]
+}
+```
 
-## Available Subjects (Eastern Cape)
+## Usage Examples
 
-Includes 46+ subjects:
-- Accounting
+### Get all acceptable parameter values
+```bash
+curl http://localhost:8000/values
+```
+
+### Get all 2025 exam sessions
+```bash
+curl http://localhost:8000/sessions/2025
+```
+
+### Get English FAL papers
+```bash
+curl "http://localhost:8000/papers/2025/MayJune?subject=english fal"
+```
+
+### Get English HL papers
+```bash
+curl "http://localhost:8000/papers/2025/MayJune?subject=english hl"
+```
+
+### Get all Afrikaans variants (FAL, HL, SAL)
+```bash
+curl "http://localhost:8000/papers/2025/MayJune?subject=afrikaans"
+```
+
+### Get IsiZulu Home Language papers
+```bash
+curl "http://localhost:8000/papers/2025/MayJune?subject=isizulu hl"
+```
+
+### Get Mathematics papers
+```bash
+curl "http://localhost:8000/papers/2025/MayJune?subject=math"
+```
+
+### Get all Home Language subjects
+```bash
+curl "http://localhost:8000/papers/2025/MayJune?subject=hl"
+```
+
+### Get all First Additional Language subjects
+```bash
+curl "http://localhost:8000/papers/2025/MayJune?subject=fal"
+```
+
+### List all subjects for a session
+```bash
+curl http://localhost:8000/subjects/2025/MayJune
+```
+
+## Available Subjects (60+)
+
+The API provides papers for all NSC subjects including:
+
+**Languages (11 official languages):**
 - Afrikaans (FAL, HL, SAL)
-- Agricultural Sciences
-- Business Studies
-- Computer Applications Technology
-- Economics
 - English (FAL, HL)
-- Geography
-- History
-- Information Technology
-- Life Sciences
-- Mathematical Literacy
-- Mathematics
-- Physical Sciences
-- Technical Mathematics
-- Technical Sciences
-- Visual Arts
-- All 11 official South African languages
-- And more...
+- IsiNdebele, IsiXhosa, IsiZulu (FAL, HL)
+- Sepedi, Sesotho, Setswana, Siswati, Tshivenda, Xitsonga (FAL, HL)
+- South African Sign Language (SASL)
+
+**STEM:**
+- Mathematics, Mathematical Literacy, Technical Mathematics
+- Physical Sciences, Life Sciences, Technical Sciences
+- Computer Application Technology, Information Technology
+- Agricultural Sciences, Agricultural Technology
+
+**Business & Commerce:**
+- Accounting, Business Studies, Economics
+
+**Arts & Culture:**
+- Visual Arts, Design, Music, Dance Studies, Dramatic Arts
+
+**Technical:**
+- Civil Technology, Electrical Technology, Mechanical Technology
+- Engineering Graphic and Design
+
+**Other:**
+- Geography, History, Tourism, Hospitality Studies
+- Consumer Studies, Religion Studies
 
 ## Project Structure
 
 ```
 past-paper-api/
 ├── main.py          # FastAPI application and endpoints
-├── scraper.py       # Web scraping functions for both sources
-├── models.py        # Pydantic data models
+├── scraper.py       # Web scraping functions
+├── models.py        # Pydantic response models
 ├── requirements.txt # Python dependencies
 └── README.md
 ```
 
-## Data Sources
+## Pydantic Models
 
-1. **education.gov.za** - Official Department of Basic Education website
-2. **ecexams.co.za** - Eastern Cape Department of Education examinations portal
+All response models are defined in `models.py`:
+
+| Model | Description |
+|-------|-------------|
+| `SessionsResponse` | Response for `/sessions` endpoint |
+| `SessionsByYearResponse` | Response for `/sessions/{year}` endpoint |
+| `PapersResponse` | Response for `/papers/{year}/{session}` endpoint |
+| `SubjectsListResponse` | Response for `/subjects/{year}/{session}` endpoint |
+| `AvailableValuesResponse` | Response for `/values` endpoint |
+| `ExamSession` | Individual session object |
+| `PaperLinks` | Paper/memo download links by language |
+
+## Data Source
+
+Papers are scraped from the official Department of Basic Education website:
+- **education.gov.za** - Official DBE NSC past papers portal
 
 ## Tech Stack
 
 - Python 3.10+
 - FastAPI
+- Pydantic v2
 - BeautifulSoup4
 - Requests
 - Uvicorn
