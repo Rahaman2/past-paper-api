@@ -1,14 +1,19 @@
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
-from requests import RequestException
+import logging
+from contextlib import asynccontextmanager
 
-from scraper import (
-    MAIN_PAGE_URL,
-    get_exam_sessions,
-    get_sessions_by_year,
-    scrape_papers_from_url,
-    group_papers_by_subject,
+from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi.middleware.cors import CORSMiddleware
+
+from scraper import MAIN_PAGE_URL
+from cache import (
+    load_cache_from_disk,
+    get_all_sessions,
+    get_sessions_for_year,
+    get_papers_for_session,
+    get_cache,
+    get_cache_age_seconds,
 )
+from scheduler import run_full_scrape, start_scheduler, stop_scheduler
 from models import (
     RootResponse,
     SessionsResponse,
@@ -18,6 +23,22 @@ from models import (
     AvailableValuesResponse,
     SessionType,
 )
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup: load cache or scrape. Shutdown: stop scheduler."""
+    loaded = load_cache_from_disk()
+    if not loaded:
+        logger.info("No cache file found. Running initial scrape...")
+        run_full_scrape()
+    start_scheduler()
+    yield
+    stop_scheduler()
+
 
 app = FastAPI(
     title="NSC Past Papers API",
@@ -31,8 +52,10 @@ API to access South African NSC (National Senior Certificate) past examination p
 
 ## Data Source
 Papers are scraped from the Department of Basic Education website (education.gov.za).
+Data is cached and refreshed daily.
     """,
-    version="2.0.0",
+    version="2.1.0",
+    lifespan=lifespan,
 )
 
 # Add CORS middleware for frontend
@@ -63,12 +86,26 @@ def root():
             "/papers/{year}/{session}?subject=math": "Filter papers by subject name",
             "/subjects/{year}/{session}": "List all subjects for a session",
             "/values": "Show all acceptable parameter values",
+            "/health": "API health and cache status",
         }
     )
 
 
+@app.get("/health")
+def health():
+    """API health check with cache status."""
+    cache = get_cache()
+    return {
+        "status": "ok" if cache else "no_cache",
+        "cache_age_seconds": int(get_cache_age_seconds() or 0),
+        "last_updated": cache.get("last_updated") if cache else None,
+        "total_sessions": len(cache.get("sessions", [])) if cache else 0,
+        "scrape_errors": cache.get("scrape_errors", []) if cache else [],
+    }
+
+
 @app.get("/values", response_model=AvailableValuesResponse)
-def get_available_values():
+def get_available_values(response: Response):
     """
     Get all acceptable parameter values for the API.
 
@@ -78,27 +115,24 @@ def get_available_values():
     - Sample list of subjects
     - Paper languages and numbers
     """
-    try:
-        sessions = get_exam_sessions()
-    except RequestException as e:
-        raise HTTPException(status_code=503, detail=f"Failed to fetch data: {str(e)}")
+    sessions = get_all_sessions()
+    if not sessions:
+        raise HTTPException(status_code=503, detail="Cache not available. Try again shortly.")
 
-    # Extract unique years (sorted descending)
+    response.headers["Cache-Control"] = "public, max-age=3600"
+
     years = sorted(set(s["year"] for s in sessions if s["year"]), reverse=True)
 
-    # Get subjects from the most recent session
+    # Get sample subjects from the most recent session in cache
     sample_subjects: list[str] = []
-    if sessions:
-        # Find a session with papers to get subject list
-        for session in sessions:
-            if session.get("working_url"):
-                try:
-                    papers = scrape_papers_from_url(session["working_url"])
-                    grouped = group_papers_by_subject(papers)
-                    sample_subjects = sorted(grouped.keys())
-                    break
-                except Exception:
-                    continue
+    for session in sessions:
+        year = session.get("year")
+        session_name = session.get("session")
+        if year and session_name:
+            papers = get_papers_for_session(year, session_name)
+            if papers:
+                sample_subjects = sorted(papers.keys())
+                break
 
     return AvailableValuesResponse(
         sessions=[s.value for s in SessionType],
@@ -110,17 +144,18 @@ def get_available_values():
 
 
 @app.get("/sessions", response_model=SessionsResponse)
-def get_sessions():
+def get_sessions(response: Response):
     """
     Get all available exam sessions.
 
     Returns a list of all exam sessions available in the database,
     including year, session type, and the URL to fetch papers from.
     """
-    try:
-        sessions = get_exam_sessions()
-    except RequestException as e:
-        raise HTTPException(status_code=503, detail=f"Failed to fetch data: {str(e)}")
+    sessions = get_all_sessions()
+    if not sessions:
+        raise HTTPException(status_code=503, detail="Cache not available. Try again shortly.")
+
+    response.headers["Cache-Control"] = "public, max-age=3600"
 
     return SessionsResponse(
         source_url=MAIN_PAGE_URL,
@@ -130,20 +165,19 @@ def get_sessions():
 
 
 @app.get("/sessions/{year}", response_model=SessionsByYearResponse)
-def get_sessions_for_year(year: str):
+def get_sessions_by_year_endpoint(year: str, response: Response):
     """
     Get exam sessions filtered by year.
 
     **Path Parameters:**
     - **year**: The exam year (e.g., "2024", "2025")
     """
-    try:
-        sessions = get_sessions_by_year(year)
-    except RequestException as e:
-        raise HTTPException(status_code=503, detail=f"Failed to fetch data: {str(e)}")
+    sessions = get_sessions_for_year(year)
 
     if not sessions:
         raise HTTPException(status_code=404, detail=f"No sessions found for year {year}")
+
+    response.headers["Cache-Control"] = "public, max-age=3600"
 
     return SessionsByYearResponse(
         year=year,
@@ -156,6 +190,7 @@ def get_sessions_for_year(year: str):
 def get_papers(
     year: str,
     session: str,
+    response: Response,
     subject: str | None = Query(
         None,
         description=(
@@ -190,34 +225,30 @@ def get_papers(
     **Response Structure:**
     Papers are grouped by: `subject -> paper_number (P1/P2/P3) -> language -> download_url`
     """
-    try:
-        sessions = get_sessions_by_year(year)
-    except RequestException as e:
-        raise HTTPException(status_code=503, detail=f"Failed to fetch data: {str(e)}")
+    year_sessions = get_sessions_for_year(year)
 
     target_session = None
-    for s in sessions:
+    for s in year_sessions:
         if s["session"] and s["session"].lower() == session.lower():
             target_session = s
             break
 
     if not target_session:
-        available = [s["session"] for s in sessions if s["session"]]
+        available = [s["session"] for s in year_sessions if s["session"]]
         raise HTTPException(
             status_code=404,
             detail=f"Session '{session}' not found for year {year}. Available: {available}",
         )
 
-    try:
-        papers = scrape_papers_from_url(target_session["working_url"])
-    except RequestException as e:
-        raise HTTPException(status_code=503, detail=f"Failed to fetch papers: {str(e)}")
-
-    grouped = group_papers_by_subject(papers)
+    grouped = get_papers_for_session(year, session)
+    if grouped is None:
+        raise HTTPException(status_code=503, detail="Paper data not cached for this session")
 
     if subject:
         subject_lower = subject.lower()
         grouped = {k: v for k, v in grouped.items() if k and subject_lower in k.lower()}
+
+    response.headers["Cache-Control"] = "public, max-age=3600"
 
     return PapersResponse(
         year=year,
@@ -229,7 +260,7 @@ def get_papers(
 
 
 @app.get("/subjects/{year}/{session}", response_model=SubjectsListResponse)
-def list_subjects(year: str, session: str):
+def list_subjects(year: str, session: str, response: Response):
     """
     List all available subjects for an exam session.
 
@@ -239,13 +270,10 @@ def list_subjects(year: str, session: str):
 
     Returns an alphabetically sorted list of all subject names available for the specified session.
     """
-    try:
-        sessions = get_sessions_by_year(year)
-    except RequestException as e:
-        raise HTTPException(status_code=503, detail=f"Failed to fetch data: {str(e)}")
+    year_sessions = get_sessions_for_year(year)
 
     target_session = None
-    for s in sessions:
+    for s in year_sessions:
         if s["session"] and s["session"].lower() == session.lower():
             target_session = s
             break
@@ -253,13 +281,13 @@ def list_subjects(year: str, session: str):
     if not target_session:
         raise HTTPException(status_code=404, detail=f"Session '{session}' not found for year {year}")
 
-    try:
-        papers = scrape_papers_from_url(target_session["working_url"])
-    except RequestException as e:
-        raise HTTPException(status_code=503, detail=f"Failed to fetch papers: {str(e)}")
+    grouped = get_papers_for_session(year, session)
+    if grouped is None:
+        raise HTTPException(status_code=503, detail="Paper data not cached for this session")
 
-    grouped = group_papers_by_subject(papers)
     subjects = sorted(grouped.keys())
+
+    response.headers["Cache-Control"] = "public, max-age=3600"
 
     return SubjectsListResponse(
         year=year,

@@ -295,6 +295,76 @@ Papers are scraped from the official Department of Basic Education website:
 - Requests
 - Uvicorn
 
+## Deployment (Contabo Server)
+
+### Live URLs
+| Service | URL |
+|---------|-----|
+| Frontend | https://matricmate.co.za |
+| API | https://api.matricmate.co.za |
+| API Docs | https://api.matricmate.co.za/docs |
+
+### Deploy Updates
+
+After pushing changes to the `main` branch, SSH into the server and run:
+
+```bash
+ssh root@185.190.140.123
+/var/www/deploy.sh
+```
+
+This script will:
+1. Pull latest changes for the API
+2. Install any new Python dependencies
+3. Restart the API service
+4. Pull latest changes for the frontend
+5. Install any new npm dependencies
+6. Rebuild the Next.js app
+7. Restart the frontend
+
+### Manual Commands
+
+**API:**
+```bash
+cd /var/www/api
+git pull origin main
+source venv/bin/activate
+pip install -r requirements.txt
+deactivate
+sudo systemctl restart pastpaper-api
+sudo systemctl status pastpaper-api
+```
+
+**Frontend:**
+```bash
+cd /var/www/matricmate
+git pull origin main
+npm install
+npm run build
+pm2 restart matricmate
+pm2 status
+```
+
+### Logs
+
+```bash
+# API logs
+sudo journalctl -u pastpaper-api -f
+
+# Frontend logs
+pm2 logs matricmate
+
+# Nginx logs
+sudo tail -f /var/log/nginx/error.log
+```
+
+### Ports
+
+| Service | Port |
+|---------|------|
+| API | 10000 |
+| Frontend | 10001 |
+
 ## License
 
 MIT
