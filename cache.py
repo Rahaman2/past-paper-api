@@ -82,6 +82,43 @@ def get_papers_for_session(year: str, session: str) -> dict | None:
     return None
 
 
+def search_papers(query: str) -> list[dict]:
+    """Search for subjects matching query across all years/sessions.
+    Returns list of dicts with year, session, source_url, total_subjects, subjects."""
+    c = get_cache()
+    if not c:
+        return []
+
+    query_lower = query.lower()
+    results = []
+
+    # Build a lookup for session working_urls
+    session_urls = {}
+    for s in c.get("sessions", []):
+        if s.get("year") and s.get("session"):
+            session_urls[f"{s['year']}|{s['session']}"] = s.get("working_url", "")
+
+    for key, subjects in c.get("papers", {}).items():
+        parts = key.split("|", 1)
+        if len(parts) != 2:
+            continue
+        year, session = parts
+
+        matched = {k: v for k, v in subjects.items() if k and query_lower in k.lower()}
+        if matched:
+            results.append({
+                "year": year,
+                "session": session,
+                "source_url": session_urls.get(key, ""),
+                "total_subjects": len(matched),
+                "subjects": matched,
+            })
+
+    # Sort by year descending, then session name
+    results.sort(key=lambda r: (-int(r["year"]) if r["year"].isdigit() else 0, r["session"]))
+    return results
+
+
 def get_cache_age_seconds() -> float | None:
     """Return seconds since last cache update, or None."""
     c = get_cache()

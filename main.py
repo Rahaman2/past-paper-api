@@ -12,6 +12,7 @@ from cache import (
     get_papers_for_session,
     get_cache,
     get_cache_age_seconds,
+    search_papers,
 )
 from scheduler import run_full_scrape, start_scheduler, stop_scheduler
 from models import (
@@ -21,6 +22,7 @@ from models import (
     PapersResponse,
     SubjectsListResponse,
     AvailableValuesResponse,
+    SearchResponse,
     SessionType,
 )
 
@@ -86,6 +88,7 @@ def root():
             "/papers/{year}/{session}?subject=math": "Filter papers by subject name",
             "/subjects/{year}/{session}": "List all subjects for a session",
             "/values": "Show all acceptable parameter values",
+            "/search?q=math": "Search papers across all years and sessions",
             "/health": "API health and cache status",
         }
     )
@@ -256,6 +259,36 @@ def get_papers(
         source_url=target_session["working_url"],
         total_subjects=len(grouped),
         subjects=grouped,
+    )
+
+
+@app.get("/search", response_model=SearchResponse)
+def search(
+    response: Response,
+    q: str = Query(
+        ...,
+        min_length=2,
+        description="Search query for subject name (case-insensitive partial match)",
+        examples=["math", "english", "physics", "accounting"],
+    ),
+):
+    """
+    Search for papers across all years and sessions.
+
+    **Query Parameters:**
+    - **q**: Subject search query (min 2 characters, case-insensitive partial match)
+
+    Returns matching subjects grouped by year/session, sorted by year descending.
+    """
+    results = search_papers(q)
+    total = sum(r["total_subjects"] for r in results)
+
+    response.headers["Cache-Control"] = "public, max-age=3600"
+
+    return SearchResponse(
+        query=q,
+        total_results=total,
+        results=results,
     )
 
 

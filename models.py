@@ -150,6 +150,28 @@ class AvailableValuesResponse(BaseModel):
     )
 
 
+class SearchResult(BaseModel):
+    """A single year/session match in search results."""
+    year: str = Field(..., description="Exam year")
+    session: str = Field(..., description="Session type")
+    source_url: str = Field(..., description="Source page URL")
+    total_subjects: int = Field(..., description="Number of matching subjects in this session")
+    subjects: dict[str, dict[str, PaperLinks]] = Field(
+        ...,
+        description="Matching papers grouped by subject -> paper number -> language -> URL"
+    )
+
+
+class SearchResponse(BaseModel):
+    """Response for GET /search endpoint."""
+    query: str = Field(..., description="The search query")
+    total_results: int = Field(..., description="Total matching subjects across all sessions")
+    results: list[SearchResult] = Field(
+        ...,
+        description="Results grouped by year/session, sorted by year descending"
+    )
+
+
 class RootResponse(BaseModel):
     """Response for GET / endpoint."""
     message: str = Field(default="NSC Past Papers API")
