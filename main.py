@@ -5,6 +5,8 @@ from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from scraper import MAIN_PAGE_URL
+from database import init_db
+from routers.waitlist import router as waitlist_router
 from cache import (
     load_cache_from_disk,
     get_all_sessions,
@@ -33,6 +35,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup: load cache or scrape. Shutdown: stop scheduler."""
+    init_db()
     loaded = load_cache_from_disk()
     if not loaded:
         logger.info("No cache file found. Running initial scrape...")
@@ -73,6 +76,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+app.include_router(waitlist_router)
 
 
 @app.get("/", response_model=RootResponse)

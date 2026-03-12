@@ -177,3 +177,44 @@ class RootResponse(BaseModel):
     message: str = Field(default="NSC Past Papers API")
     source: str = Field(default="Department of Basic Education (education.gov.za)")
     endpoints: dict[str, str] = Field(..., description="Available API endpoints")
+
+
+# --- Waitlist Models ---
+
+from typing import Optional
+from datetime import datetime
+
+
+class WaitlistRequest(BaseModel):
+    """Request body for POST /api/waitlist."""
+    name: str = Field(..., min_length=1, description="Full name")
+    whatsapp: str = Field(..., min_length=6, description="WhatsApp number")
+    grade: str = Field(..., description="Grade: Grade 10, Grade 11, or Grade 12")
+    subject: str = Field(..., description="Subject of interest")
+    preference: str = Field(..., pattern="^(pay|ads)$", description="'pay' or 'ads'")
+    email: Optional[str] = Field(None, description="Optional email address")
+
+
+class WaitlistSubmitResponse(BaseModel):
+    """Response for POST /api/waitlist."""
+    success: bool
+    message: str
+    id: int
+
+
+class WaitlistEntry(BaseModel):
+    """A single waitlist entry."""
+    id: int
+    name: str
+    whatsapp: str
+    grade: str
+    subject: str
+    preference: str
+    email: Optional[str] = None
+    created_at: str
+
+
+class AdminWaitlistResponse(BaseModel):
+    """Response for GET /api/admin/waitlist."""
+    total: int
+    entries: list[WaitlistEntry]
